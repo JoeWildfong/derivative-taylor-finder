@@ -1,21 +1,58 @@
 #![allow(dead_code)]
 
+use std::{ops::{Add, Sub, Mul, Div, Deref}, rc::Rc};
+
+#[derive(PartialEq, Clone, Debug)]
+pub struct FunctionRef {
+    f: Rc<Box<Function>>
+}
+
+impl FunctionRef {
+    fn as_fn(&self) -> &Function {
+        &self.f
+    }
+
+    fn new(f: Function) -> Self {
+        Self {
+            f: Rc::new(Box::new(f))
+        }
+    }
+
+    fn clone_from(f: &Function) -> Self {
+        Self::new(f.clone())
+    }
+}
+
+impl Deref for FunctionRef {
+    type Target = Function;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_fn()
+    }
+}
+
+impl std::fmt::Display for FunctionRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.as_fn().fmt(f)
+    }
+}
+
 #[derive(PartialEq, Clone, Debug)]
 pub enum Function {
     Constant(f64),
     X,
-    Add(Box<Function>, Box<Function>),
-    Subtract(Box<Function>, Box<Function>),
-    Multiply(Box<Function>, Box<Function>),
-    Divide(Box<Function>, Box<Function>),
-    Powi(Box<Function>, f64),
-    Powa(f64, Box<Function>),
-    Pow(Box<Function>, Box<Function>),
-    Exp(Box<Function>),
-    Ln(Box<Function>),
-    Sin(Box<Function>),
-    Cos(Box<Function>),
-    Tan(Box<Function>),
+    Add(FunctionRef, FunctionRef),
+    Subtract(FunctionRef, FunctionRef),
+    Multiply(FunctionRef, FunctionRef),
+    Divide(FunctionRef, FunctionRef),
+    Powi(FunctionRef, f64),
+    Powa(f64, FunctionRef),
+    Pow(FunctionRef, FunctionRef),
+    Exp(FunctionRef),
+    Ln(FunctionRef),
+    Sin(FunctionRef),
+    Cos(FunctionRef),
+    Tan(FunctionRef),
 }
 
 impl Function {
@@ -38,242 +75,266 @@ impl Function {
         }
     }
 
-    pub fn prime(self) -> Self {
+    pub fn prime(&self) -> Self {
         match self {
             Self::Constant(_) => Self::Constant(0.0),
             Self::X => Self::Constant(1.0),
             Self::Add(f, g) => f.prime() + g.prime(),
             Self::Subtract(f, g) => f.prime() - g.prime(),
-            Self::Multiply(f, g) => f.clone().prime() * *g.clone() + *f * g.prime(),
-            Self::Divide(f, g) => (*g.clone() * f.clone().prime() - *f * g.clone().prime()) / g.powf(2.0),
-            Self::Powi(f, a) => (a * f.clone().powf(a - 1.0)) * f.prime(),
-            Self::Powa(a, f) => Self::Powa(a, f.clone()) * Self::Constant(a.ln()) * f.prime(),
-            Self::Pow(f, g) => (Self::Pow(f.clone(), g.clone()) * g.clone().prime() * f.clone().ln()) + *g * f.clone().prime() / *f,
-            Self::Exp(f) => Self::Exp(f.clone()) * f.prime(),
-            Self::Ln(f) => f.clone().prime() / Self::Ln(f),
-            Self::Sin(f) => f.clone().cos() * f.prime(),
-            Self::Cos(f) => -1.0 * f.clone().sin() * f.prime(),
-            Self::Tan(f) => 1.0 / f.clone().cos().powf(2.0) * f.prime(),
+            Self::Multiply(f, g) => {
+                match (f.as_fn(), g.as_fn()) {
+                    (Function::Constant(_), Function::Constant(_)) => Function::Constant(0.0),
+                    (Function::Constant(a), f) => *a * f.prime(),
+                    (f, Function::Constant(a)) => *a * f.prime(),
+                    (f, g) => f.prime() * g + f * g.prime(),
+                }
+            }
+            Self::Divide(f, g) =>  {
+                match (f.as_fn(), g.as_fn()) {
+                    (Function::Constant(_), Function::Constant(_)) => Function::Constant(0.0),
+                    (Function::Constant(a), f) => *a / f.prime(),
+                    (f, Function::Constant(a)) => f.prime() / *a,
+                    (f, g) => (g * f.prime() - f * g.prime()) / g.powf(2.0),
+                }
+            },
+            Self::Powi(f, a) => (*a * f.powf(a - 1.0)) * f.prime(),
+            Self::Powa(a, f) => Self::Powa(*a, f.clone()) * Self::Constant(a.ln()) * f.prime(),
+            Self::Pow(f, g) => f.pow(g) * g.prime() * f.ln() + g.as_fn() * f.prime() / f.as_fn(),
+            Self::Exp(f) => f.exp() * f.prime(),
+            Self::Ln(f) => f.prime() / f.as_fn(),
+            Self::Sin(f) => f.cos() * f.prime(),
+            Self::Cos(f) => -1.0 * f.sin() * f.prime(),
+            Self::Tan(f) => f.prime() / f.cos().powf(2.0),
         }
     }
 
-    pub fn pow(self, other: Self) -> Self {
-        if self == Function::Constant(0.0) {
+    pub fn pow(&self, other: &Self) -> Self {
+        if self == &Function::Constant(0.0) {
             return Self::Constant(0.0);
         } 
-        if self == Function::Constant(1.0) {
+        if self == &Function::Constant(1.0) {
             return Self::Constant(1.0);
         } 
-        if other == Function::Constant(0.0) {
+        if other == &Function::Constant(0.0) {
             return Self::Constant(1.0);
         } 
-        if other == Function::Constant(1.0) {
-            return self;
+        if other == &Function::Constant(1.0) {
+            return self.clone();
         } 
         match (self, other) {
-            (Function::Constant(a), Function::Constant(b)) => Self::Constant(a.powf(b)),
-            (f, Function::Constant(a)) => Self::Powi(Box::new(f), a),
-            (Function::Constant(a), f) => Self::Powa(a, Box::new(f)),
-            (f, g) => Self::Pow(Box::new(f), Box::new(g)),
+            (Function::Constant(a), Function::Constant(b)) => Self::Constant(a.powf(*b)),
+            (f, Function::Constant(a)) => Self::Powi(FunctionRef::clone_from(f), *a),
+            (Function::Constant(a), f) => Self::Powa(*a, FunctionRef::clone_from(f)),
+            (f, g) => Self::Pow(FunctionRef::clone_from(f), FunctionRef::clone_from(g)),
         }
     }
 
-    pub fn powf(self, other: f64) -> Self {
-        self.pow(Function::Constant(other))
+    pub fn powf(&self, other: f64) -> Self {
+        self.pow(&Function::Constant(other))
     }
 
-    pub fn exp(self) -> Self {
+    pub fn exp(&self) -> Self {
         match self {
-            Self::Constant(a) => a.exp().into(),
-            _ => Self::Exp(Box::new(self))
+            Self::Constant(a) => Function::Constant(a.exp()),
+            _ => Self::Exp(FunctionRef::clone_from(self))
         }
     }
 
-    pub fn ln(self) -> Self {
+    pub fn ln(&self) -> Self {
         match self {
-            Self::Constant(a) => a.ln().into(),
-            _ => Self::Ln(Box::new(self))
+            Self::Constant(a) => Function::Constant(a.ln()),
+            _ => Self::Ln(FunctionRef::clone_from(self))
         }
     }
 
-    pub fn sin(self) -> Self {
+    pub fn sin(&self) -> Self {
         match self {
-            Self::Constant(a) => a.sin().into(),
-            _ => Self::Sin(Box::new(self))
+            Self::Constant(a) => Function::Constant(a.sin()),
+            _ => Self::Sin(FunctionRef::clone_from(self))
         }
     }
 
-    pub fn cos(self) -> Self {
+    pub fn cos(&self) -> Self {
         match self {
-            Self::Constant(a) => a.cos().into(),
-            _ => Self::Cos(Box::new(self))
+            Self::Constant(a) => Function::Constant(a.cos()),
+            _ => Self::Cos(FunctionRef::clone_from(self))
         }
     }
 
-    pub fn tan(self) -> Self {
+    pub fn tan(&self) -> Self {
         match self {
-            Self::Constant(a) => a.tan().into(),
-            _ => Self::Tan(Box::new(self))
+            Self::Constant(a) => Function::Constant(a.tan()),
+            _ => Self::Tan(FunctionRef::clone_from(self))
         }
     }
 }
 
-impl std::ops::Add for Function {
-    type Output = Function;
-
-    fn add(self, other: Self) -> Self::Output {
-        if other == Function::Constant(0.0) {
-            return self;
-        }
-        if self == Function::Constant(0.0) {
-            return other;
-        }
-        match (self, other) {
-            (Function::Constant(a), Function::Constant(b)) => Function::Constant(a + b),
-            (f, g) => Function::Add(Box::new(f), Box::new(g)),
-        }
-    }
-}
-
-impl<'a> std::ops::Sub for Function {
-    type Output = Function;
-    
-    fn sub(self, other: Self) -> Self::Output {
-        if other == Function::Constant(0.0) {
-            return self;
-        }
-        if self == Function::Constant(0.0) {
-            return other;
-        }
-        match (self, other) {
-            (Function::Constant(a), Function::Constant(b)) => Function::Constant(a - b),
-            (f, g) => Function::Subtract(Box::new(f), Box::new(g)),
-        }
-    }
-}
-
-impl<'a> std::ops::Mul for Function {
-    type Output = Function;
-    
-    fn mul(self, other: Self) -> Self::Output {
-        if self == Function::Constant(0.0) || other == Function::Constant(0.0) {
-            return Function::Constant(0.0);
-        }
-        if other == Function::Constant(1.0) {
-            return self;
-        }
-        if self == Function::Constant(1.0) {
-            return other;
-        }
-        match (self, other) {
-            (Function::Constant(a), Function::Constant(b)) => Function::Constant(a * b),
-            (f, g) => Function::Multiply(Box::new(f), Box::new(g)),
-        }
-    }
-}
-
-impl<'a> std::ops::Div for Function {
-    type Output = Function;
-    
-    fn div(self, other: Self) -> Self::Output {
-        if other == Function::Constant(1.0) {
-            return self;
-        }
-        match (self, other) {
-            (Function::Constant(a), Function::Constant(b)) => Function::Constant(a / b),
-            (f, g) => Function::Divide(Box::new(f), Box::new(g)),
-        }
-    }
-}
-
-impl<'a> core::fmt::Display for Function {
+impl core::fmt::Display for Function {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let repr = match self {
             Self::Constant(a) => format!("{}", a),
             Self::X => "x".to_owned(),
-            Self::Add(a, b) => format!("({} + {})", a.as_ref(), b.as_ref()),
-            Self::Subtract(a, b) => format!("({} - {})", a.as_ref(), b.as_ref()),
-            Self::Multiply(a, b) => format!("({} * {})", a.as_ref(), b.as_ref()),
-            Self::Divide(a, b) => format!("({} / {})", a.as_ref(), b.as_ref()),
-            Self::Powi(a, b) => format!("({} ^ {})", a.as_ref(), b),
-            Self::Powa(a, b) => format!("({} ^ {})", a, b.as_ref()),
-            Self::Pow(a, b) => format!("({} ^ {})", a.as_ref(), b.as_ref()),
-            Self::Exp(a) => format!("(e ^ {})", a.as_ref()),
-            Self::Ln(a) => format!("ln({})", a.as_ref()),
-            Self::Sin(a) => format!("sin({})", a.as_ref()),
-            Self::Cos(a) => format!("cos({})", a.as_ref()),
-            Self::Tan(a) => format!("tan({})", a.as_ref()),
+            Self::Add(a, b) => format!("({} + {})", a, b),
+            Self::Subtract(a, b) => format!("({} - {})", a, b),
+            Self::Multiply(a, b) => format!("({} * {})", a, b),
+            Self::Divide(a, b) => format!("({} / {})", a, b),
+            Self::Powi(a, b) => format!("({} ^ {})", a, b),
+            Self::Powa(a, b) => format!("({} ^ {})", a, b),
+            Self::Pow(a, b) => format!("({} ^ {})", a, b),
+            Self::Exp(a) => format!("(e ^ {})", a),
+            Self::Ln(a) => format!("ln({})", a),
+            Self::Sin(a) => format!("sin({})", a),
+            Self::Cos(a) => format!("cos({})", a),
+            Self::Tan(a) => format!("tan({})", a),
         };
         write!(f, "{}", repr)
     }
 }
 
-impl<'a> From<f64> for Function {
+impl Add for Function {
+    type Output = Function;
+
+    fn add(self, other: Self) -> Self::Output {
+        if self == Function::Constant(0.0) {
+            return other;
+        }
+        if other == Function::Constant(0.0) {
+            return self;
+        }
+        match (self, other) {
+            (Function::Constant(a), Function::Constant(b)) => Function::Constant(f64::add(a, b)),
+            (f, g) => Function::Add(FunctionRef::new(f), FunctionRef::new(g)),
+        }
+    }
+}
+
+impl Sub for Function {
+    type Output = Function;
+
+    fn sub(self, other: Self) -> Self::Output {
+        if self == Function::Constant(0.0) {
+            return other;
+        }
+        if other == Function::Constant(0.0) {
+            return self;
+        }
+        match (self, other) {
+            (Function::Constant(a), Function::Constant(b)) => Function::Constant(f64::sub(a, b)),
+            (f, g) => Function::Subtract(FunctionRef::new(f), FunctionRef::new(g)),
+        }
+    }
+}
+
+impl Mul for Function {
+    type Output = Function;
+
+    fn mul(self, other: Self) -> Self::Output {
+        if self == Function::Constant(0.0) || other == Function::Constant(0.0) {
+            return Function::Constant(0.0);
+        }
+        if self == Function::Constant(1.0) {
+            return other;
+        }
+        if other == Function::Constant(1.0) {
+            return self;
+        }
+        match (self, other) {
+            (Function::Constant(a), Function::Constant(b)) => Function::Constant(f64::mul(a, b)),
+            (f, g) => Function::Multiply(FunctionRef::new(f), FunctionRef::new(g)),
+        }
+    }
+}
+
+impl Div for Function {
+    type Output = Function;
+
+    fn div(self, other: Self) -> Self::Output {
+        if self == Function::Constant(0.0) {
+            return Function::Constant(0.0);
+        }
+        match (self, other) {
+            (Function::Constant(a), Function::Constant(b)) => Function::Constant(f64::div(a, b)),
+            (f, g) => Function::Divide(FunctionRef::new(f), FunctionRef::new(g)),
+        }
+    }
+}
+
+macro_rules! function_binop {
+    (impl $imp:ident, $method:ident as $variant:ident) => {
+        impl $imp for &Function {
+            type Output = Function;
+
+            fn $method(self, other: Self) -> Self::Output {
+                Function::$method(self.clone(), other.clone())
+            }
+        }
+
+        impl $imp<Function> for &Function {
+            type Output = Function;
+
+            fn $method(self, other: Function) -> Self::Output {
+                Function::$method(self.clone(), other)
+            }
+        }
+
+        impl $imp<&Function> for Function {
+            type Output = Function;
+
+            fn $method(self, other: &Function) -> Self::Output {
+                Function::$method(self, other.clone())
+            }
+        }
+    };
+}
+
+function_binop!(impl Add, add as Add);
+function_binop!(impl Sub, sub as Subtract);
+function_binop!(impl Mul, mul as Multiply);
+function_binop!(impl Div, div as Divide);
+
+impl From<f64> for Function {
     fn from(val: f64) -> Self {
         Self::Constant(val)
     }
 }
 
-impl std::ops::Add<f64> for Function {
-    type Output = Function;
-    
-    fn add(self, other: f64) -> Self::Output {
-        self + Function::Constant(other)
-    }
+macro_rules! float_binop {
+    (impl $imp:ident, $method:ident) => {
+        impl $imp<&Function> for f64 {
+            type Output = Function;
+
+            fn $method(self, other: &Function) -> Self::Output {
+                Function::$method(Function::Constant(self), other)
+            }
+        }
+
+        impl $imp<Function> for f64 {
+            type Output = Function;
+
+            fn $method(self, other: Function) -> Self::Output {
+                Function::$method(Function::Constant(self), other)
+            }
+        }
+
+        impl $imp<f64> for Function {
+            type Output = Function;
+
+            fn $method(self, other: f64) -> Self::Output {
+                Function::$method(self, Function::Constant(other))
+            }
+        }
+
+        impl $imp<f64> for &Function {
+            type Output = Function;
+
+            fn $method(self, other: f64) -> Self::Output {
+                Function::$method(self.clone(), Function::Constant(other))
+            }
+        }
+    };
 }
 
-impl std::ops::Sub<f64> for Function {
-    type Output = Function;
-    
-    fn sub(self, other: f64) -> Self::Output {
-        self - Function::Constant(other)
-    }
-}
-
-impl std::ops::Mul<f64> for Function {
-    type Output = Function;
-    
-    fn mul(self, other: f64) -> Self::Output {
-        self * Function::Constant(other)
-    }
-}
-
-impl std::ops::Div<f64> for Function {
-    type Output = Function;
-    
-    fn div(self, other: f64) -> Self::Output {
-        self / Function::Constant(other)
-    }
-}
-
-impl std::ops::Add<Function> for f64 {
-    type Output = Function;
-
-    fn add(self, other: Function) -> Self::Output {
-        Function::Constant(self) + other
-    }
-}
-
-impl std::ops::Sub<Function> for f64 {
-    type Output = Function;
-
-    fn sub(self, other: Function) -> Self::Output {
-        Function::Constant(self) - other
-    }
-}
-
-impl std::ops::Mul<Function> for f64 {
-    type Output = Function;
-
-    fn mul(self, other: Function) -> Self::Output {
-        Function::Constant(self) * other
-    }
-}
-
-impl std::ops::Div<Function> for f64 {
-    type Output = Function;
-
-    fn div(self, other: Function) -> Self::Output {
-        Function::Constant(self) / other
-    }
-}
+float_binop!(impl Add, add);
+float_binop!(impl Sub, sub);
+float_binop!(impl Mul, mul);
+float_binop!(impl Div, div);

@@ -1,6 +1,6 @@
 use crate::Function;
 
-pub fn taylor<'a>(order: u64, center: f64, f: &Function) -> Function {
+pub fn taylor(order: u64, center: f64, f: &Function) -> Function {
     let mut polynomial = Function::from(0.0);
     let mut nth_derivative = f.clone();
     for n in 0..= order {
